@@ -2,207 +2,250 @@
 #include <stdlib.h>
 #include <time.h>
 #include <stdbool.h>
-#include <math.h> // For abs()
+#include <string.h>
 
+// --- Game Configuration ---
 #define BOARD_WIDTH 8
 #define BOARD_HEIGHT 8
-#define NUM_CANDY_TYPES 4
-#define EMPTY_SPACE 0
+#define NUM_CANDY_TYPES 5
+#define EMPTY_TYPE 0
+#define BOMB_TYPE (NUM_CANDY_TYPES + 1)
 
-// Function Prototypes
-void populateBoard(int board[BOARD_HEIGHT][BOARD_WIDTH]); // NEW
-void displayBoard(int board[BOARD_HEIGHT][BOARD_WIDTH]);
-bool isValidSwap(int board[BOARD_HEIGHT][BOARD_WIDTH], int r1, int c1, int r2, int c2); // NEW
-void swapCandies(int board[BOARD_HEIGHT][BOARD_WIDTH], int r1, int c1, int r2, int c2); // NEW
-int findAndFlagMatches(int board[BOARD_HEIGHT][BOARD_WIDTH]);
-void removeMatches(int board[BOARD_HEIGHT][BOARD_WIDTH]);
-void applyGravityAndRefill(int board[BOARD_HEIGHT][BOARD_WIDTH]); // RENAMED
+// --- Data Structures ---
+typedef enum {
+    SPECIAL_NONE, SPECIAL_STRIPED_H, SPECIAL_STRIPED_V, SPECIAL_BOMB
+} SpecialType;
 
+typedef struct {
+    int type;
+    SpecialType special;
+} Candy;
+
+// --- Function Prototypes ---
+void populateBoard(Candy board[BOARD_HEIGHT][BOARD_WIDTH]);
+void displayBoard(const Candy board[BOARD_HEIGHT][BOARD_WIDTH]);
+bool isValidSwap(Candy board[BOARD_HEIGHT][BOARD_WIDTH], int r1, int c1, int r2, int c2);
+void swapCandies(Candy board[BOARD_HEIGHT][BOARD_WIDTH], int r1, int c1, int r2, int c2);
+void findAndMarkMatches(Candy board[BOARD_HEIGHT][BOARD_WIDTH], bool clear_map[BOARD_HEIGHT][BOARD_WIDTH]);
+void activateSpecials(Candy board[BOARD_HEIGHT][BOARD_WIDTH], bool clear_map[BOARD_HEIGHT][BOARD_WIDTH]);
+int clearCandies(Candy board[BOARD_HEIGHT][BOARD_WIDTH], bool clear_map[BOARD_HEIGHT][BOARD_WIDTH]);
+void applyGravityAndRefill(Candy board[BOARD_HEIGHT][BOARD_WIDTH]);
+void copyBoard(Candy dest[BOARD_HEIGHT][BOARD_WIDTH], const Candy src[BOARD_HEIGHT][BOARD_WIDTH]);
+
+// --- Main Game Loop ---
 int main(void) {
-    int gameBoard[BOARD_HEIGHT][BOARD_WIDTH];
+    Candy gameBoard[BOARD_HEIGHT][BOARD_WIDTH];
     int score = 0;
+    int movesLeft = 25;
     srand(time(NULL));
 
     populateBoard(gameBoard);
 
-    // The main interactive game loop
-    while (true) {
-        printf("\n--- Score: %d ---\n", score);
+    while (movesLeft > 0) {
+        printf("\n--- Score: %d | Moves Left: %d ---\n", score, movesLeft);
         displayBoard(gameBoard);
 
-        // Get user input
         int r1, c1, r2, c2;
-        printf("Enter swap coordinates (row1 col1 row2 col2): ");
-        int result = scanf("%d %d %d %d", &r1, &c1, &r2, &c2);
-
-        // Input validation
-        if (result != 4 || r1 < 0 || r1 >= BOARD_HEIGHT || c1 < 0 || c1 >= BOARD_WIDTH ||
-            r2 < 0 || r2 >= BOARD_HEIGHT || c2 < 0 || c2 >= BOARD_WIDTH) {
-            printf("Invalid input. Please enter 4 numbers between 0 and 7.\n");
-            // Clear the input buffer to prevent an infinite loop on bad text input
+        printf("Enter swap (row1 col1 row2 col2): ");
+        if (scanf("%d %d %d %d", &r1, &c1, &r2, &c2) != 4) {
+            printf("Invalid input. Try again.\n");
             while (getchar() != '\n');
-            continue; // Skip to the next loop iteration
-        }
-
-        // Check for a valid move
-        if (!isValidSwap(gameBoard, r1, c1, r2, c2)) {
-            printf("Invalid swap. Must be adjacent and create a match.\n");
             continue;
         }
 
-        // Perform the swap
-        swapCandies(gameBoard, r1, c1, r2, c2);
-        printf("\nPerforming swap...\n");
-        displayBoard(gameBoard);
-
-        // Handle cascades
-        int turnScore = 0;
-        while (true) {
-            int matchesFound = findAndFlagMatches(gameBoard);
-            if (matchesFound == 0) {
-                break;
-            }
-            turnScore += matchesFound;
-            removeMatches(gameBoard);
-            applyGravityAndRefill(gameBoard);
-            printf("\nCascade! Board after clearing and refill:\n");
-            displayBoard(gameBoard);
+        if (!isValidSwap(gameBoard, r1, c1, r2, c2)) {
+            printf("--> Invalid Move! Swap must be adjacent and create a match.\n");
+            continue;
         }
+
+        movesLeft--;
+        swapCandies(gameBoard, r1, c1, r2, c2);
+
+        int turnScore = 0;
+        int totalCleared;
+        do {
+            bool clear_map[BOARD_HEIGHT][BOARD_WIDTH] = {false};
+            
+            findAndMarkMatches(gameBoard, clear_map);
+            activateSpecials(gameBoard, clear_map);
+            totalCleared = clearCandies(gameBoard, clear_map);
+            
+            if (totalCleared > 0) {
+                turnScore += totalCleared;
+                printf("\nCleared %d candies!\n", totalCleared);
+                applyGravityAndRefill(gameBoard);
+                printf("Board after gravity and refill:\n");
+                displayBoard(gameBoard);
+            }
+        } while (totalCleared > 0);
+        
         score += turnScore;
-        printf("You scored %d points this turn!\n", turnScore);
+        if (turnScore > 0) printf("Scored %d points this turn!\n", turnScore);
     }
 
+    printf("\n--- GAME OVER ---\nFinal Score: %d\n", score);
     return 0;
 }
 
-// NEW: Extracted board population into its own function
-void populateBoard(int board[BOARD_HEIGHT][BOARD_WIDTH]) {
+// --- Function Definitions ---
+
+void populateBoard(Candy board[BOARD_HEIGHT][BOARD_WIDTH]) {
+    bool clear_map[BOARD_HEIGHT][BOARD_WIDTH];
     do {
-        for (int row = 0; row < BOARD_HEIGHT; row++) {
-            for (int col = 0; col < BOARD_WIDTH; col++) {
-                board[row][col] = rand() % NUM_CANDY_TYPES + 1;
+        // BUGFIX: clear_map MUST be reset to all false on each iteration.
+        // memset is the standard C function to fill a block of memory with a value.
+        // Here, we fill it with 0, which is equivalent to 'false'.
+        memset(clear_map, 0, sizeof(clear_map));
+
+        for (int r = 0; r < BOARD_HEIGHT; r++) {
+            for (int c = 0; c < BOARD_WIDTH; c++) {
+                board[r][c].type = rand() % NUM_CANDY_TYPES + 1;
+                board[r][c].special = SPECIAL_NONE;
             }
         }
-    // Ensure the initial board has at least one match to start.
-    // In a real game, you'd ensure NO matches exist to start.
-    // For our test program, this guarantees we can see cascades.
-    } while (findAndFlagMatches(board) == 0);
-
-    // Now clear the flags for the actual start of the game
-    for (int row = 0; row < BOARD_HEIGHT; row++) {
-        for (int col = 0; col < BOARD_WIDTH; col++) {
-            board[row][col] = abs(board[row][col]);
-        }
-    }
+        findAndMarkMatches(board, clear_map);
+        int initial_matches = 0;
+        for(int r=0; r<BOARD_HEIGHT; r++) for(int c=0; c<BOARD_WIDTH; c++) if(clear_map[r][c]) initial_matches++;
+        if (initial_matches == 0) break;
+    } while (true);
 }
 
-void displayBoard(int board[BOARD_HEIGHT][BOARD_WIDTH]) {
+void displayBoard(const Candy board[BOARD_HEIGHT][BOARD_WIDTH]) {
     printf("   ");
     for(int i = 0; i < BOARD_WIDTH; i++) printf(" %d ", i);
     printf("\n-----------------------------\n");
-    for (int row = 0; row < BOARD_HEIGHT; row++) {
-        printf("%d |", row);
-        for (int col = 0; col < BOARD_WIDTH; col++) {
-            printf(" %d ", board[row][col]);
+    for (int r = 0; r < BOARD_HEIGHT; r++) {
+        printf("%d |", r);
+        for (int c = 0; c < BOARD_WIDTH; c++) {
+            if (board[r][c].type == EMPTY_TYPE) printf(" . ");
+            else if (board[r][c].special == SPECIAL_BOMB) printf(" B ");
+            else {
+                char s = (board[r][c].special == SPECIAL_STRIPED_H) ? '-' : (board[r][c].special == SPECIAL_STRIPED_V) ? '|' : ' ';
+                printf("%d%c ", board[r][c].type, s);
+            }
         }
         printf("|\n");
     }
     printf("-----------------------------\n");
 }
 
-// NEW: Checks if a swap is legal.
-bool isValidSwap(int board[BOARD_HEIGHT][BOARD_WIDTH], int r1, int c1, int r2, int c2) {
-    // 1. Check if candies are adjacent
-    int row_diff = abs(r1 - r2);
-    int col_diff = abs(c1 - c2);
-    if (!((row_diff == 1 && col_diff == 0) || (row_diff == 0 && col_diff == 1))) {
-        return false; // Not adjacent
-    }
-
-    // 2. Temporarily perform the swap
-    swapCandies(board, r1, c1, r2, c2);
-
-    // 3. Check if the swap creates a match
-    int matches = findAndFlagMatches(board);
-
-    // 4. Swap back to restore the original board state
-    swapCandies(board, r1, c1, r2, c2);
-    
-    // 5. Unflag any candies that were flagged during the check
-    for (int r = 0; r < BOARD_HEIGHT; r++) {
-        for (int c = 0; c < BOARD_WIDTH; c++) {
-            board[r][c] = abs(board[r][c]);
-        }
-    }
-
-    return matches > 0;
+void copyBoard(Candy dest[BOARD_HEIGHT][BOARD_WIDTH], const Candy src[BOARD_HEIGHT][BOARD_WIDTH]) {
+    memcpy(dest, src, sizeof(Candy) * BOARD_HEIGHT * BOARD_WIDTH);
 }
 
-// NEW: Simple function to swap two candies on the board.
-void swapCandies(int board[BOARD_HEIGHT][BOARD_WIDTH], int r1, int c1, int r2, int c2) {
-    int temp = board[r1][c1];
+bool isValidSwap(Candy board[BOARD_HEIGHT][BOARD_WIDTH], int r1, int c1, int r2, int c2) {
+    if (!(abs(r1 - r2) + abs(c1 - c2) == 1)) return false;
+
+    Candy tempBoard[BOARD_HEIGHT][BOARD_WIDTH];
+    copyBoard(tempBoard, board);
+    swapCandies(tempBoard, r1, c1, r2, c2);
+
+    if (tempBoard[r1][c1].special == SPECIAL_BOMB || tempBoard[r2][c2].special == SPECIAL_BOMB) return true;
+
+    bool temp_clear_map[BOARD_HEIGHT][BOARD_WIDTH] = {false};
+    findAndMarkMatches(tempBoard, temp_clear_map);
+
+    for(int r=0; r<BOARD_HEIGHT; r++) for(int c=0; c<BOARD_WIDTH; c++) if(temp_clear_map[r][c]) return true;
+    
+    return false;
+}
+
+void swapCandies(Candy board[BOARD_HEIGHT][BOARD_WIDTH], int r1, int c1, int r2, int c2) {
+    Candy temp = board[r1][c1];
     board[r1][c1] = board[r2][c2];
     board[r2][c2] = temp;
 }
 
-// RENAMED and UPDATED from previous step's challenge
-void applyGravityAndRefill(int board[BOARD_HEIGHT][BOARD_WIDTH]) {
-    for (int col = 0; col < BOARD_WIDTH; col++) {
+void findAndMarkMatches(Candy board[BOARD_HEIGHT][BOARD_WIDTH], bool clear_map[BOARD_HEIGHT][BOARD_WIDTH]) {
+    // Horizontal matches
+    for (int r = 0; r < BOARD_HEIGHT; r++) {
+        for (int c = 0; c < BOARD_WIDTH - 2; ) {
+            if (board[r][c].type == EMPTY_TYPE) { c++; continue; }
+            int match_type = board[r][c].type;
+            int match_len = 1;
+            while (c + match_len < BOARD_WIDTH && board[r][c + match_len].type == match_type) {
+                match_len++;
+            }
+
+            if (match_len >= 3) {
+                for (int i = 0; i < match_len; i++) clear_map[r][c + i] = true;
+                if (match_len == 5) {
+                    board[r][c].special = SPECIAL_BOMB;
+                } else if (match_len == 4) {
+                    board[r][c].special = SPECIAL_STRIPED_V;
+                }
+            }
+            c += match_len;
+        }
+    }
+    // Vertical matches
+    for (int c = 0; c < BOARD_WIDTH; c++) {
+        for (int r = 0; r < BOARD_HEIGHT - 2; ) {
+            if (board[r][c].type == EMPTY_TYPE) { r++; continue; }
+            int match_type = board[r][c].type;
+            int match_len = 1;
+            while (r + match_len < BOARD_HEIGHT && board[r + match_len][c].type == match_type) {
+                match_len++;
+            }
+
+            if (match_len >= 3) {
+                for (int i = 0; i < match_len; i++) clear_map[r + i][c] = true;
+                if (match_len == 5) {
+                    board[r][c].special = SPECIAL_BOMB;
+                } else if (match_len == 4) {
+                    board[r][c].special = SPECIAL_STRIPED_H;
+                }
+            }
+            r += match_len;
+        }
+    }
+}
+
+void activateSpecials(Candy board[BOARD_HEIGHT][BOARD_WIDTH], bool clear_map[BOARD_HEIGHT][BOARD_WIDTH]) {
+    bool changed;
+    do {
+        changed = false;
+        for (int r = 0; r < BOARD_HEIGHT; r++) {
+            for (int c = 0; c < BOARD_WIDTH; c++) {
+                if (clear_map[r][c]) {
+                    if (board[r][c].special == SPECIAL_STRIPED_H) {
+                        for (int i = 0; i < BOARD_WIDTH; i++) if (!clear_map[r][i]) { clear_map[r][i] = true; changed = true; }
+                    } else if (board[r][c].special == SPECIAL_STRIPED_V) {
+                        for (int i = 0; i < BOARD_HEIGHT; i++) if (!clear_map[i][c]) { clear_map[i][c] = true; changed = true; }
+                    }
+                }
+            }
+        }
+    } while (changed); // Loop until a full pass makes no new changes
+}
+
+int clearCandies(Candy board[BOARD_HEIGHT][BOARD_WIDTH], bool clear_map[BOARD_HEIGHT][BOARD_WIDTH]) {
+    int cleared_count = 0;
+    for (int r = 0; r < BOARD_HEIGHT; r++) {
+        for (int c = 0; c < BOARD_WIDTH; c++) {
+            if (clear_map[r][c]) {
+                board[r][c].type = EMPTY_TYPE;
+                board[r][c].special = SPECIAL_NONE;
+                cleared_count++;
+            }
+        }
+    }
+    return cleared_count;
+}
+
+void applyGravityAndRefill(Candy board[BOARD_HEIGHT][BOARD_WIDTH]) {
+    for (int c = 0; c < BOARD_WIDTH; c++) {
         int write_row = BOARD_HEIGHT - 1;
-        for (int read_row = BOARD_HEIGHT - 1; read_row >= 0; read_row--) {
-            if (board[read_row][col] != EMPTY_SPACE) {
-                board[write_row][col] = board[read_row][col];
+        for (int r = BOARD_HEIGHT - 1; r >= 0; r--) {
+            if (board[r][c].type != EMPTY_TYPE) {
+                if (r != write_row) board[write_row][c] = board[r][c];
                 write_row--;
             }
         }
         while (write_row >= 0) {
-            board[write_row][col] = rand() % NUM_CANDY_TYPES + 1; // Refill with random
+            board[write_row][c].type = rand() % NUM_CANDY_TYPES + 1;
+            board[write_row][c].special = SPECIAL_NONE;
             write_row--;
-        }
-    }
-}
-
-// findAndFlagMatches and removeMatches are unchanged from the previous step.
-// (You can copy them from your last file).
-// I'll include them here for completeness.
-
-int findAndFlagMatches(int board[BOARD_HEIGHT][BOARD_WIDTH]) {
-    int matchBoard[BOARD_HEIGHT][BOARD_WIDTH] = {0};
-    int matches = 0;
-
-    for (int row = 0; row < BOARD_HEIGHT; row++) {
-        for (int col = 0; col < BOARD_WIDTH - 2; col++) {
-            int candy = abs(board[row][col]);
-            if (candy != EMPTY_SPACE && candy == abs(board[row][col + 1]) && candy == abs(board[row][col + 2])) {
-                matchBoard[row][col] = 1; matchBoard[row][col + 1] = 1; matchBoard[row][col + 2] = 1;
-            }
-        }
-    }
-    for (int col = 0; col < BOARD_WIDTH; col++) {
-        for (int row = 0; row < BOARD_HEIGHT - 2; row++) {
-            int candy = abs(board[row][col]);
-            if (candy != EMPTY_SPACE && candy == abs(board[row + 1][col]) && candy == abs(board[row + 2][col])) {
-                matchBoard[row][col] = 1; matchBoard[row + 1][col] = 1; matchBoard[row + 2][col] = 1;
-            }
-        }
-    }
-    for (int row = 0; row < BOARD_HEIGHT; row++) {
-        for (int col = 0; col < BOARD_WIDTH; col++) {
-            if (matchBoard[row][col] == 1 && board[row][col] > 0) {
-                matches++;
-                board[row][col] = -board[row][col];
-            }
-        }
-    }
-    return matches;
-}
-
-void removeMatches(int board[BOARD_HEIGHT][BOARD_WIDTH]) {
-    for (int row = 0; row < BOARD_HEIGHT; row++) {
-        for (int col = 0; col < BOARD_WIDTH; col++) {
-            if (board[row][col] < 0) {
-                board[row][col] = EMPTY_SPACE;
-            }
         }
     }
 }
