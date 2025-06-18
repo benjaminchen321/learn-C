@@ -1,6 +1,6 @@
 /*******************************************************************
 *
-* C-CRUSH: THE DEFINITIVE POLISHED EDITION (v7.0)
+* C-CRUSH: THE DEFINITIVE POLISHED EDITION (v8.0)
 *
 * This is the final, production-quality version of the game.
 * It features a robust, persistent UI with large, distinct ASCII art,
@@ -8,7 +8,7 @@
 * defensive coding. This is the culmination of our journey.
 *
 * Final Features:
-* - New, highly-distinct ASCII art for all candies.
+* - New, highly-distinct ASCII art for all candies and specials.
 * - Flawless, constant-width grid rendering with vertical spacing.
 * - Correct activation logic for ALL special candies in ALL match types.
 * - Player-centric special candy creation.
@@ -38,11 +38,11 @@
 #define BOARD_HEIGHT 8
 #define NUM_CANDY_TYPES 5
 #define EMPTY_TYPE 0
-#define MIN_TERM_ROWS 32 // Increased for larger ASCII art and spacing
+#define MIN_TERM_ROWS 32
 #define MIN_TERM_COLS 80
 #define CASCADE_DELAY_US 200000
 #define ASCII_ART_HEIGHT 2
-#define CELL_WIDTH 7 // Width of a single cell in characters: [ ##### ]
+#define CELL_WIDTH 7
 
 // --- ANSI Color & Control Codes ---
 #define CLEAR_SCREEN "\x1b[2J"
@@ -161,8 +161,8 @@ void display(const GameState *gs) {
     if (!gs) return;
     switch (gs->mode) {
         case STATE_SHOW_INTRO:         displayIntro(); break;
-        case STATE_PLAYING_LEVEL:      // Fall-through
-        case STATE_SELECTING_SWAP_DIR: // Fall-through
+        case STATE_PLAYING_LEVEL:
+        case STATE_SELECTING_SWAP_DIR:
         case STATE_PROCESSING:         displayGame(gs); break;
         case STATE_LEVEL_COMPLETE:     displayLevelComplete(gs); break;
         case STATE_GAME_OVER_FINAL:    displayGameOver(gs); break;
@@ -171,7 +171,7 @@ void display(const GameState *gs) {
 }
 
 void displayIntro() {
-    CURSOR_POS(1, 5);
+    CURSOR_POS(1, 1);
     printf(CLEAR_SCREEN);
     printf(COLOR_BOLD "--- WELCOME TO C-CRUSH! ---\n\n" COLOR_RESET);
     CURSOR_POS(4, 5);
@@ -184,17 +184,17 @@ void displayIntro() {
     printf("W, A, S, D or Arrow Keys : Choose direction to swap\n");
     CURSOR_POS(9, 5);
     printf("Q                          : Quit the game at any time\n");
-    CURSOR_POS(13, 5);
+    CURSOR_POS(12, 5);
     printf(COLOR_YELLOW "--- SPECIAL CANDIES ---\n" COLOR_RESET);
-    CURSOR_POS(17, 5);
+    CURSOR_POS(14, 5);
     printf("Match 4 -> Striped Candy: Clears a row or column.\n");
-    CURSOR_POS(19, 5);
+    CURSOR_POS(15, 5);
     printf("Match 5 or T/L -> Color Bomb: Swap to clear all of one color.\n");
-    CURSOR_POS(21, 5);
+    CURSOR_POS(16, 5);
     printf("Match Bomb in a line -> Explodes in a 3x3 area.\n");
-    CURSOR_POS(23, 5);
+    CURSOR_POS(17, 5);
     printf("Match Bomb + Bomb -> Clears the entire board!\n");
-    CURSOR_POS(26, 5);
+    CURSOR_POS(19, 1);
     printf(COLOR_BOLD "PRESS ANY KEY TO START...\n" COLOR_RESET);
     fflush(stdout);
 }
@@ -202,24 +202,32 @@ void displayIntro() {
 void displayGame(const GameState *gs) {
     if (!gs) return;
     const char* candy_colors[] = {COLOR_RESET, COLOR_RED, COLOR_GREEN, COLOR_YELLOW, COLOR_BLUE, COLOR_MAGENTA};
+    // --- NEW ASCII ART: Distinct, blocky patterns ---
     const char* ascii_art[NUM_CANDY_TYPES + 1][ASCII_ART_HEIGHT] = {
         {"     ", "     "}, // EMPTY
         {"█████", "█████"}, // Solid Block
         {"█ █ █", " █ █ "}, // Checkered
-        {"~~~~~", "~~~~~"}, // Wavy
+        {"VVVVV", "VVVVV"}, // Wavy
         {"/\\/\\/", "\\/\\/\\"}, // Jagged
         {" O O ", "O O O"}  // Circles
+    };
+    // --- NEW ASCII ART FOR SPECIALS ---
+    const char* special_art[4][ASCII_ART_HEIGHT] = {
+        {"", ""}, // None
+        {"=====", "====="}, // Striped H
+        {"|||||", "| | |"}, // Striped V
+        {" / \\ ", "( B )"}  // Bomb
     };
 
     CURSOR_POS(1, 1);
     printf(CLEAR_SCREEN);
-    printf(COLOR_BOLD "--- C-CRUSH: LEVEL %d ---\n" COLOR_RESET, gs->currentLevel);
+    printf(COLOR_BOLD "----------------------- C-CRUSH -----------------------\n" COLOR_RESET);
     CURSOR_POS(2, 1);
-    printf("Score: %-5d / %-5d | Moves Left: %-5d | (Q to Quit)\n", gs->score, gs->targetScore, gs->movesLeft);
+    printf("\nScore: %-5d / %-5d | Moves Left: %-5d | (Q to Quit)\n\n", gs->score, gs->targetScore, gs->movesLeft);
     CURSOR_POS(3, 1);
-    printf("--------------------------------------------------------\n");
+    printf("\n\n--------------------------------------------------------\n");
     
-    size_t board_start_row = 4;
+    size_t board_start_row = 7;
     for (size_t r = 0; r < BOARD_HEIGHT; r++) {
         for (size_t art_line = 0; art_line < ASCII_ART_HEIGHT; art_line++) {
             CURSOR_POS(board_start_row + (r * (ASCII_ART_HEIGHT + 1)) + art_line, 1);
@@ -242,27 +250,16 @@ void displayGame(const GameState *gs) {
                 if (candy->type == EMPTY_TYPE) {
                     printf("     ");
                 } else {
-                    printf("%s%s%s", candy_colors[candy->type], ascii_art[candy->type][art_line], COLOR_RESET);
+                    // Use special art if available, otherwise use normal art
+                    const char* art_to_use = (candy->special != SPECIAL_NONE) ? 
+                                             special_art[candy->special][art_line] : 
+                                             ascii_art[candy->type][art_line];
+                    printf("%s%s%s", candy_colors[candy->type], art_to_use, COLOR_RESET);
                 }
+                
+                if (is_cursor_on || is_selected) printf(CURSOR_COLOR);
                 printf("%c", right_bracket);
-
                 if (is_cursor_on || is_selected) printf(COLOR_RESET);
-            }
-        }
-    }
-    
-    for (size_t r = 0; r < BOARD_HEIGHT; r++) {
-        for (size_t c = 0; c < BOARD_WIDTH; c++) {
-            const Candy *candy = &gs->board[r][c];
-            if (candy->special != SPECIAL_NONE) {
-                size_t screen_r = board_start_row + (r * (ASCII_ART_HEIGHT + 1)) + (ASCII_ART_HEIGHT / 2);
-                size_t screen_c = 1 + (c * CELL_WIDTH) + (CELL_WIDTH / 2) - 1;
-                CURSOR_POS(screen_r, screen_c);
-                printf(COLOR_WHITE COLOR_BOLD);
-                if (candy->special == SPECIAL_BOMB) printf("(B)");
-                else if (candy->special == SPECIAL_STRIPED_H) printf("---");
-                else if (candy->special == SPECIAL_STRIPED_V) printf("| |");
-                printf(COLOR_RESET);
             }
         }
     }
@@ -278,9 +275,9 @@ void displayGame(const GameState *gs) {
 void displayLevelComplete(const GameState *gs) {
     if (!gs) return;
     displayGame(gs);
-    CURSOR_POS(BOARD_HEIGHT * (ASCII_ART_HEIGHT + 1) + 6, 10);
+    CURSOR_POS(BOARD_HEIGHT * (ASCII_ART_HEIGHT + 1) + 6, 1);
     printf(COLOR_GREEN COLOR_BOLD "--- LEVEL %d COMPLETE! ---\n" COLOR_RESET, gs->currentLevel);
-    CURSOR_POS(BOARD_HEIGHT * (ASCII_ART_HEIGHT + 1) + 7, 10);
+    CURSOR_POS(BOARD_HEIGHT * (ASCII_ART_HEIGHT + 1) + 7, 1);
     printf("Press any key to continue to the next level...\n");
     fflush(stdout);
 }
@@ -299,22 +296,17 @@ void processInput(GameState *gs) {
     if (!gs) return;
     char c = '\0';
     if (read(STDIN_FILENO, &c, 1) == -1 && errno != EAGAIN) handleFatalError("read");
-    
-    // --- ARROW KEY SUPPORT ---
-    if (c == '\x1b') { // Escape character, likely an arrow key
+    if (c == '\x1b') {
         char seq[2];
         if (read(STDIN_FILENO, &seq[0], 1) != 1) return;
         if (read(STDIN_FILENO, &seq[1], 1) != 1) return;
         if (seq[0] == '[') {
             switch (seq[1]) {
-                case 'A': c = 'w'; break; // Up
-                case 'B': c = 's'; break; // Down
-                case 'C': c = 'd'; break; // Right
-                case 'D': c = 'a'; break; // Left
+                case 'A': c = 'w'; break; case 'B': c = 's'; break;
+                case 'C': c = 'd'; break; case 'D': c = 'a'; break;
             }
         }
     }
-
     if (c == '\0') return;
     if (c == 'q' || c == 'Q') {
         gs->mode = STATE_QUIT;
@@ -337,10 +329,8 @@ void processInput(GameState *gs) {
             int dr = 0, dc = 0;
             bool direction_chosen = true;
             switch (c) {
-                case 'w': dr = -1; break;
-                case 's': dr = 1; break;
-                case 'a': dc = -1; break;
-                case 'd': dc = 1; break;
+                case 'w': dr = -1; break; case 's': dr = 1; break;
+                case 'a': dc = -1; break; case 'd': dc = 1; break;
                 case ' ': gs->mode = STATE_PLAYING_LEVEL; direction_chosen = false; break;
                 default: direction_chosen = false; break;
             }
