@@ -38,8 +38,8 @@
 #define BOARD_HEIGHT 8
 #define NUM_CANDY_TYPES 5
 #define EMPTY_TYPE 0
-#define MIN_TERM_ROWS 32
-#define MIN_TERM_COLS 80
+#define MIN_TERM_ROWS 28
+#define MIN_TERM_COLS 28
 #define CASCADE_DELAY_US 200000
 #define ASCII_ART_HEIGHT 2
 #define CELL_WIDTH 7
